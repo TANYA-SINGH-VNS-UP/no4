@@ -1,18 +1,31 @@
-import asyncio, httpx, os, re, yt_dlp
+import asyncio, httpx, yt_dlp, os
+import glob, re, random, json, requests
 
 from typing import Union
 from pyrogram.types import Message
+from urllib3.util.retry import Retry
+from requests.adapters import HTTPAdapter
 from pyrogram.enums import MessageEntityType
-from youtubesearchpython.__future__ import VideosSearch
+from concurrent.futures import ThreadPoolExecutor
+from youtubesearchpython.__future__ import VideosSearch, CustomSearch
 
 from PURVIMUSIC.utils.database import is_on_off
 from PURVIMUSIC.utils.formatters import time_to_seconds
 
-def time_to_seconds(time):
-    stringt = str(time)
-    return sum(int(x) * 60**i for i, x in enumerate(reversed(stringt.split(":"))))
-
-
+def cookie_txt_file():
+    try:
+        folder_path = f"{os.getcwd()}/cookies"
+        filename = f"{os.getcwd()}/cookies/logs.csv"
+        txt_files = glob.glob(os.path.join(folder_path, '*.txt'))
+        if not txt_files:
+            raise FileNotFoundError("No .txt files found in the specified folder.")
+        cookie_txt_file = random.choice(txt_files)
+        with open(filename, 'a') as file:
+            file.write(f'Choosen File : {cookie_txt_file}\n')
+        return f"""cookies/{str(cookie_txt_file).split("/")[-1]}"""
+    except:
+        pass
+      
 async def shell_cmd(cmd):
     proc = await asyncio.create_subprocess_shell(
         cmd,
@@ -29,26 +42,32 @@ async def shell_cmd(cmd):
 
 
 async def get_stream_url(query, video=False):
-    
-    api_base = "http://80.211.133.129:7000"
-    api_key = "SANATANI_TECH"
-    endpoint = "/video" if video else "/audio"
-    api_url = f"{api_base}{endpoint}"
-    
-    async with httpx.AsyncClient(timeout=120) as client:
-        params = {"url": query, "api_key": api_key}
-        try:
-            response = await client.get(api_url, params=params)
-            if response.status_code != 200:
-                return ""
-            
-            data = response.json()
-            if data.get("status") and data.get("result"):
-                return data["result"]["url"]
-            return ""
-        except Exception as e:
-            print(f"Error calling YouTube API: {e}")
-            return ""
+    apis = [
+        {
+            "url": "http://80.211.209.128:1470/youtube",
+            "key": "VNI0X_XhIaXtR60htKU0w"
+        },
+        {
+            "url": "http://80.211.209.128:1470/youtube",
+            "key": "VNI0X_XhIaXtR60htKU0w"
+        }
+    ]
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        for api in apis:
+            try:
+                params = {"query": query, "video": video, "api_key": api["key"]}
+                response = await client.get(api["url"], params=params)
+
+                if response.status_code == 200:
+                    info = response.json()
+                    stream_url = info.get("stream_url")
+                    if stream_url:
+                        return stream_url
+            except Exception:
+                continue
+
+    return ""
 
 
 class YouTubeAPI:
@@ -139,9 +158,6 @@ class YouTubeAPI:
         return thumbnail
 
     async def video(self, link: str, videoid: Union[bool, str] = None):
-        """
-        Updated to use our integrated API for video streaming
-        """
         if videoid:
             link = self.base + link
         if "&" in link:
@@ -149,16 +165,6 @@ class YouTubeAPI:
             
         return await get_stream_url(link, True)
         
-    async def audio(self, link: str, videoid: Union[bool, str] = None):
-        """
-        New method to get audio stream URL using our integrated API
-        """
-        if videoid:
-            link = self.base + link
-        if "&" in link:
-            link = link.split("&")[0]
-            
-        return await get_stream_url(link, False)
 
     async def playlist(self, link, limit, user_id, videoid: Union[bool, str] = None):
         if videoid:
@@ -263,21 +269,8 @@ class YouTubeAPI:
         format_id: Union[bool, str] = None,
         title: Union[bool, str] = None,
     ) -> str:
-        """
-        Updated download method to use our integrated API instead of yt-dlp
-        """
         if videoid:
             link = self.base + link
-            
-        # For simple audio/video downloads, use our API
-        if video and not songvideo:
-            downloaded_file = await get_stream_url(link, True)
-            return downloaded_file, None
-        elif not video and not songaudio:
-            downloaded_file = await get_stream_url(link, False)
-            return downloaded_file, None
-        
-        # For specific format downloads, fall back to original yt-dlp method
         loop = asyncio.get_running_loop()
 
         def audio_dl():
@@ -360,9 +353,10 @@ class YouTubeAPI:
             fpath = f"downloads/{title}.mp3"
             return fpath
         elif video:
-            downloaded_file = await loop.run_in_executor(None, video_dl)
+            downloaded_file = await get_stream_url(link, True)
             direct = None
         else:
-            downloaded_file = await loop.run_in_executor(None, audio_dl)
             direct = None
+            downloaded_file = await get_stream_url(link, False)
         return downloaded_file, direct
+
